@@ -20,3 +20,9 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8000/unacked" -Method GET
 Invoke-RestMethod -Uri "http://127.0.0.1:8000/ack?ids=1" -Method GET
 
 Invoke-RestMethod -Uri "http://127.0.0.1:8000/unacked" -Method GET
+
+
+fetch('http://127.0.0.1:8000/health')
+    .then(r => r.json())
+    .then(j => console.log('✅ SUCCESS:', j))
+    .catch(e => console.error('❌ BLOCKED:', e.message));
