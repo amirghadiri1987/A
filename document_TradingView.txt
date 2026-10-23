@@ -5,3 +5,18 @@ pip list | findstr /I "fastapi uvicorn pydantic"
 
 # 3
 python -m uvicorn server:app --host 127.0.0.1 --port 8000
+
+# 4
+http://127.0.0.1:8000/health
+
+http://127.0.0.1:8000/docs
+
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/push" -Method POST -ContentType "application/json" -Body '{"passphrase":"GCI_SECRET_2026","ticker":"OANDA:XAUUSD","bar_time_utc":"2026-07-13T14:30:00.000Z","bS":0,"buS":1,"bH":0,"buH":1,"bA":0,"buA":0}'
+
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/poll?format=plain&mark=0" -Method GET
+
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/unacked" -Method GET
+
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/ack?ids=1" -Method GET
+
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/unacked" -Method GET
