@@ -1,5 +1,5 @@
 // @version=5
-indicator("Gold Scalping GCI PRO V 2.0", overlay=false, precision=3)
+indicator("Gold Scalping GCI PRO V 2.0 (Non-Repaint)", overlay=false, precision=3)
 
 //====================================================
 // INPUTS
@@ -27,36 +27,36 @@ pivotLeft  = input.int(3, "Divergence Pivot Left", minval=1)
 pivotRight = input.int(3, "Divergence Pivot Right", minval=1)
 divLookback = input.int(50, "Maximum Divergence Distance", minval=10)
 
+// --- Signals ---
+where_Full = input.string("gciBullish_bullMomentum", "Full", options = ["gciBullish_bullMomentum", "gciBullish", "bullMomentum"])
 
 //====================================================
-// MARKET DATA
+// MARKET DATA (اصلاح ۱: غیرفعال کردن Lookahead)
 //====================================================
-zb_close = request.security("CBOT:ZB1!", timeframe.period, close - ta.atr(14))
-zf_close = request.security("CBOT:ZF1!", timeframe.period, close - ta.atr(14))
-tn_close = request.security("CBOT:TN1!", timeframe.period, close - ta.atr(14))
-dxy_close = request.security("BBG:BG10USDE", timeframe.period, close - ta.atr(14))
-sil_close = request.security("OANDA:XAGUSD", timeframe.period, close - ta.atr(14))
-aud_close = request.security("OANDA:AUDUSD", timeframe.period, close - ta.atr(14))
-
+// با استفاده از lookahead=barmerge.lookahead_off، داده‌های تایم‌فریم بالاتر فقط پس از بسته شدن کندل آن تایم‌فریم برگردانده می‌شوند.
+zb_close  = request.security("CBOT:ZB1!", timeframe.period, close, lookahead = barmerge.lookahead_off)
+zf_close  = request.security("CBOT:ZF1!", timeframe.period, close, lookahead = barmerge.lookahead_off)
+tn_close  = request.security("CBOT:TN1!", timeframe.period, close, lookahead = barmerge.lookahead_off)
+dxy_close = request.security("BBG:BG10USDE", timeframe.period, close, lookahead = barmerge.lookahead_off)
+sil_close = request.security("OANDA:XAGUSD", timeframe.period, close, lookahead = barmerge.lookahead_off)
+aud_close = request.security("OANDA:AUDUSD", timeframe.period, close, lookahead = barmerge.lookahead_off)
 
 //====================================================
 // FUNCTION: RAW GCI
 //====================================================
 f_gci(_lookback) =>
-    roc_zb  = ta.roc(zb_close, _lookback)
-    roc_zf  = ta.roc(zf_close, _lookback)
-    roc_tn  = ta.roc(tn_close, _lookback)
+    roc_zb   = ta.roc(zb_close, _lookback)
+    roc_zf   = ta.roc(zf_close, _lookback)
+    roc_tn   = ta.roc(tn_close, _lookback)
     roc_dxy  = ta.roc(dxy_close, _lookback)
     roc_sil  = ta.roc(sil_close, _lookback)
     roc_aud  = ta.roc(aud_close, _lookback)
 
     (roc_zb * w_zb) + (roc_zf * w_zf) + (roc_tn * w_tn) - (roc_dxy * w_dxy) + (roc_sil * w_silver) + (roc_aud * w_aud)
 
-
 //====================================================
 // THREE SPEEDS
 //====================================================
-
 gci_fast_raw   = f_gci(fastLookback)
 gci_medium_raw = f_gci(mediumLookback)
 gci_slow_raw   = f_gci(slowLookback)
@@ -68,169 +68,104 @@ gci_slow   = ta.ema(gci_slow_raw, slowSmooth)
 //====================================================
 // SLOPE / MOMENTUM OF EACH SPEED
 //====================================================
-
 fastSlope   = gci_fast - gci_fast[1]
 mediumSlope = gci_medium - gci_medium[1]
 slowSlope   = gci_slow - gci_slow[1]
 
 //====================================================
-// DIVERGENCE
-// Price = XAUUSD current chart
-// GCI = Medium
+// DIVERGENCE (اصلاح ۲: استفاده از کندل تأییدشده)
 //====================================================
+// توابع پیوت به طور ذاتی با تأخیر تأیید می‌شوند. برای جلوگیری از ریپینت تاریخی،
+// از مقدار پیوتِ کندلِ کاملاً بسته‌شده قبلی استفاده می‌کنیم.
+pricePivotHigh = ta.pivothigh(high, pivotLeft, pivotRight)[1]
+pricePivotLow  = ta.pivotlow(low, pivotLeft, pivotRight)[1]
 
-// Price pivots
-pricePivotHigh = ta.pivothigh(high, pivotLeft, pivotRight)
-pricePivotLow  = ta.pivotlow(low, pivotLeft, pivotRight)
-
-// GCI pivots
-gciPivotHigh = ta.pivothigh(gci_medium, pivotLeft, pivotRight)
-gciPivotLow  = ta.pivotlow(gci_medium, pivotLeft, pivotRight)
-
-//----------------------------------------------------
-// Store previous price/GCI pivot highs
-//----------------------------------------------------
+gciPivotHigh = ta.pivothigh(gci_medium, pivotLeft, pivotRight)[1]
+gciPivotLow  = ta.pivotlow(gci_medium, pivotLeft, pivotRight)[1]
 
 var float prevPriceHigh = na
 var float prevGciHigh   = na
+var float prevPriceLow  = na
+var float prevGciLow    = na
 
-var float prevPriceLow = na
-var float prevGciLow   = na
-
-// Current pivot values
 currentPriceHigh = pricePivotHigh
 currentGciHigh   = gciPivotHigh
+currentPriceLow  = pricePivotLow
+currentGciLow    = gciPivotLow
 
-currentPriceLow = pricePivotLow
-currentGciLow   = gciPivotLow
-
-//----------------------------------------------------
-// Bearish Divergence
-//
-// Price: Higher High
-// GCI:   Lower High
-//----------------------------------------------------
-
+// --- Bearish Divergence ---
 bearishDivergence = false
+if not na(currentPriceHigh) and not na(currentGciHigh) and not na(prevPriceHigh) and not na(prevGciHigh)
+    priceHigherHigh = currentPriceHigh > prevPriceHigh
+    gciLowerHigh    = currentGciHigh < prevGciHigh
+    bearishDivergence := priceHigherHigh and gciLowerHigh
 
 if not na(currentPriceHigh) and not na(currentGciHigh)
-
-    if not na(prevPriceHigh) and not na(prevGciHigh)
-
-        priceHigherHigh = currentPriceHigh > prevPriceHigh
-        gciLowerHigh    = currentGciHigh < prevGciHigh
-
-        bearishDivergence := priceHigherHigh and gciLowerHigh
-
     prevPriceHigh := currentPriceHigh
     prevGciHigh   := currentGciHigh
 
-//----------------------------------------------------
-// Bullish Divergence
-//
-// Price: Lower Low
-// GCI:   Higher Low
-//----------------------------------------------------
-
+// --- Bullish Divergence ---
 bullishDivergence = false
+if not na(currentPriceLow) and not na(currentGciLow) and not na(prevPriceLow) and not na(prevGciLow)
+    priceLowerLow = currentPriceLow < prevPriceLow
+    gciHigherLow  = currentGciLow > prevGciLow
+    bullishDivergence := priceLowerLow and gciHigherLow
 
 if not na(currentPriceLow) and not na(currentGciLow)
-
-    if not na(prevPriceLow) and not na(prevGciLow)
-
-        priceLowerLow = currentPriceLow < prevPriceLow
-        gciHigherLow  = currentGciLow > prevGciLow
-
-        bullishDivergence := priceLowerLow and gciHigherLow
-
     prevPriceLow := currentPriceLow
     prevGciLow   := currentGciLow
 
 //====================================================
 // GCI DIRECTION
 //====================================================
-
-gciBullish =
-     gci_fast > 0 and
-     gci_medium > 0 and
-     gci_slow > 0
-
-gciBearish =
-     gci_fast < 0 and
-     gci_medium < 0 and
-     gci_slow < 0
+gciBullish = gci_fast > 0 and gci_medium > 0 and gci_slow > 0
+gciBearish = gci_fast < 0 and gci_medium < 0 and gci_slow < 0
 
 //====================================================
 // MOMENTUM ALIGNMENT
 //====================================================
-
-bullMomentum =
-     fastSlope > 0 and
-     mediumSlope > 0
-
-bearMomentum =
-     fastSlope < 0 and
-     mediumSlope < 0
+bullMomentum = fastSlope > 0 and mediumSlope > 0
+bearMomentum = fastSlope < 0 and mediumSlope < 0
 
 //====================================================
 // PLOTS
 //====================================================
-
 hline(0, "Zero", color=color.gray, linestyle=hline.style_dotted)
-
 plot(gci_slow, title="GCI Slow", color=color.blue, linewidth=2)
-
 plot(gci_medium, title="GCI Medium", color=color.orange, linewidth=2)
-
 plot(gci_fast, title="GCI Fast", color=color.aqua, linewidth=1)
 
 //====================================================
-// DIVERGENCE MARKERS
+// DIVERGENCE MARKERS (اصلاح ۳: اعمال barstate.isconfirmed)
 //====================================================
+// سیگنال واگرایی فقط زمانی نمایش داده می‌شود که کندل به طور کامل بسته شده باشد.
+confirmedBearishDiv = bearishDivergence and barstate.isconfirmed
+confirmedBullishDiv = bullishDivergence and barstate.isconfirmed
 
-plotshape(bearishDivergence, title="Bearish Divergence", style=shape.triangledown, location=location.top, color=color.red, size=size.small, text="DIV↓")
-
-plotshape(bullishDivergence, title="Bullish Divergence", style=shape.triangleup, location=location.bottom,color=color.lime, size=size.small, text="DIV↑")
-
-//====================================================
-// MOMENTUM MARKERS
-//====================================================
-
-plotshape(gciBullish and bullMomentum, title="Full Bull Alignment", style=shape.circle, location=location.bottom, color=color.lime, size=size.tiny)
-
-plotshape(gciBearish and bearMomentum, title="Full Bear Alignment", style=shape.circle, location=location.top, color=color.red, size=size.tiny)
+plotshape(confirmedBearishDiv, title="Confirmed Bearish Divergence", style=shape.triangledown, location=location.top, color=color.red, size=size.small, text="DIV↓")
+plotshape(confirmedBullishDiv, title="Confirmed Bullish Divergence", style=shape.triangleup, location=location.bottom,color=color.lime, size=size.small, text="DIV↑")
 
 //====================================================
-// ALERTS
+// FINAL ALIGNMENT CONDITIONS
 //====================================================
+finalBullCond = gciBullish and bullMomentum
 
-// alertcondition(
-//      bearishDivergence,
-//      title="XAU Bearish GCI Divergence",
-//      message="XAUUSD Higher High + GCI Lower High"
-// )
+finalBearCond = gciBearish and bearMomentum
 
-// alertcondition(
-//      bullishDivergence,
-//      title="XAU Bullish GCI Divergence",
-//      message="XAUUSD Lower Low + GCI Higher Low"
-// )
+//====================================================
+// ALIGNMENT PLOTSHAPES (اصلاح ۳: اعمال barstate.isconfirmed)
+//====================================================
+// سیگنال‌های هم‌راستایی نیز فقط در بسته شدن کندل تأیید و نمایش داده می‌شوند.
+confirmedBullAlign = finalBullCond and barstate.isconfirmed
+confirmedBearAlign = finalBearCond and barstate.isconfirmed
 
-// alertcondition(
-//      gciBullish and bullMomentum,
-//      title="GCI Full Bull Alignment",
-//      message="GCI Fast + Medium + Slow bullish"
-// )
+plotshape(confirmedBullAlign, title="Bull Alignment", style=shape.circle, location=location.bottom, color=color.lime, size=size.tiny)
+plotshape(confirmedBearAlign, title="Bear Alignment", style=shape.circle, location=location.top, color=color.red, size=size.tiny)
 
-// alertcondition(
-//      gciBearish and bearMomentum,
-//      title="GCI Full Bear Alignment",
-//      message="GCI Fast + Medium + Slow bearish"
-// )
-
-
-
-
-
-
-
+//====================================================
+// ALERTS (اصلاح ۴: هشدارها فقط در بسته شدن کندل)
+//====================================================
+alertcondition(confirmedBearishDiv, title="XAU Bearish GCI Divergence", message="XAUUSD Higher High + GCI Lower High")
+alertcondition(confirmedBullishDiv, title="XAU Bullish GCI Divergence", message="XAUUSD Lower Low + GCI Higher Low")
+alertcondition(confirmedBullAlign, title="GCI Full Bull Alignment", message="GCI Fast + Medium + Slow bullish")
+alertcondition(confirmedBearAlign, title="GCI Full Bear Alignment", message="GCI Fast + Medium + Slow bearish")
