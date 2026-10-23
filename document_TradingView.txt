@@ -2,3 +2,6 @@ pip install fastapi==0.110.3 uvicorn==0.24.0 pydantic==2.5.2 httpx==0.25.2
 
 # 2 تأیید نصب
 pip list | findstr /I "fastapi uvicorn pydantic"
+
+# 3
+python -m uvicorn server:app --host 127.0.0.1 --port 8000
