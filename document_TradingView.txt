@@ -1,28 +1,236 @@
-pip install fastapi==0.110.3 uvicorn==0.24.0 pydantic==2.5.2 httpx==0.25.2
+// @version=5
+indicator("Gold Scalping GCI PRO V 2.0", overlay=false, precision=3)
 
-# 2 تأیید نصب
-pip list | findstr /I "fastapi uvicorn pydantic"
+//====================================================
+// INPUTS
+//====================================================
 
-# 3
-python -m uvicorn server:app --host 127.0.0.1 --port 8000
+// --- سرعت‌های GCI ---
+fastLookback   = input.int(3,  "GCI Fast Lookback",   minval=1)
+mediumLookback = input.int(5,  "GCI Medium Lookback", minval=2)
+slowLookback   = input.int(10, "GCI Slow Lookback",   minval=3)
 
-# 4
-http://127.0.0.1:8000/health
+fastSmooth   = input.int(2, "Fast Smoothing",   minval=1)
+mediumSmooth = input.int(3, "Medium Smoothing", minval=1)
+slowSmooth   = input.int(5, "Slow Smoothing",   minval=1)
 
-http://127.0.0.1:8000/docs
+// --- وزن‌ها ---
+w_zb = input.float(0.15, "ZB Weight", group = "ZB")
+w_zf = input.float(0.15, "ZF Weight", group = "ZF")
+w_tn = input.float(0.20, "TN Weight", group = "TN")
+w_dxy = input.float(0.25, "DXY Weight", group = "DXY")
+w_silver = input.float(0.15, "Silver Weight", group = "Silver")
+w_aud = input.float(0.10, "AUDUSD Weight", group = "AUDUSD")
 
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/push" -Method POST -ContentType "application/json" -Body '{"passphrase":"GCI_SECRET_2026","ticker":"OANDA:XAUUSD","bar_time_utc":"2026-07-13T14:30:00.000Z","bS":0,"buS":1,"bH":0,"buH":1,"bA":0,"buA":0}'
-
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/poll?format=plain&mark=0" -Method GET
-
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/unacked" -Method GET
-
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/ack?ids=1" -Method GET
-
-Invoke-RestMethod -Uri "http://127.0.0.1:8000/unacked" -Method GET
+// --- Divergence ---
+pivotLeft  = input.int(3, "Divergence Pivot Left", minval=1)
+pivotRight = input.int(3, "Divergence Pivot Right", minval=1)
+divLookback = input.int(50, "Maximum Divergence Distance", minval=10)
 
 
-fetch('http://127.0.0.1:8000/health')
-    .then(r => r.json())
-    .then(j => console.log('✅ SUCCESS:', j))
-    .catch(e => console.error('❌ BLOCKED:', e.message));
+//====================================================
+// MARKET DATA
+//====================================================
+zb_close = request.security("CBOT:ZB1!", timeframe.period, close - ta.atr(14))
+zf_close = request.security("CBOT:ZF1!", timeframe.period, close - ta.atr(14))
+tn_close = request.security("CBOT:TN1!", timeframe.period, close - ta.atr(14))
+dxy_close = request.security("BBG:BG10USDE", timeframe.period, close - ta.atr(14))
+sil_close = request.security("OANDA:XAGUSD", timeframe.period, close - ta.atr(14))
+aud_close = request.security("OANDA:AUDUSD", timeframe.period, close - ta.atr(14))
+
+
+//====================================================
+// FUNCTION: RAW GCI
+//====================================================
+f_gci(_lookback) =>
+    roc_zb  = ta.roc(zb_close, _lookback)
+    roc_zf  = ta.roc(zf_close, _lookback)
+    roc_tn  = ta.roc(tn_close, _lookback)
+    roc_dxy  = ta.roc(dxy_close, _lookback)
+    roc_sil  = ta.roc(sil_close, _lookback)
+    roc_aud  = ta.roc(aud_close, _lookback)
+
+    (roc_zb * w_zb) + (roc_zf * w_zf) + (roc_tn * w_tn) - (roc_dxy * w_dxy) + (roc_sil * w_silver) + (roc_aud * w_aud)
+
+
+//====================================================
+// THREE SPEEDS
+//====================================================
+
+gci_fast_raw   = f_gci(fastLookback)
+gci_medium_raw = f_gci(mediumLookback)
+gci_slow_raw   = f_gci(slowLookback)
+
+gci_fast   = ta.ema(gci_fast_raw, fastSmooth)
+gci_medium = ta.ema(gci_medium_raw, mediumSmooth)
+gci_slow   = ta.ema(gci_slow_raw, slowSmooth)
+
+//====================================================
+// SLOPE / MOMENTUM OF EACH SPEED
+//====================================================
+
+fastSlope   = gci_fast - gci_fast[1]
+mediumSlope = gci_medium - gci_medium[1]
+slowSlope   = gci_slow - gci_slow[1]
+
+//====================================================
+// DIVERGENCE
+// Price = XAUUSD current chart
+// GCI = Medium
+//====================================================
+
+// Price pivots
+pricePivotHigh = ta.pivothigh(high, pivotLeft, pivotRight)
+pricePivotLow  = ta.pivotlow(low, pivotLeft, pivotRight)
+
+// GCI pivots
+gciPivotHigh = ta.pivothigh(gci_medium, pivotLeft, pivotRight)
+gciPivotLow  = ta.pivotlow(gci_medium, pivotLeft, pivotRight)
+
+//----------------------------------------------------
+// Store previous price/GCI pivot highs
+//----------------------------------------------------
+
+var float prevPriceHigh = na
+var float prevGciHigh   = na
+
+var float prevPriceLow = na
+var float prevGciLow   = na
+
+// Current pivot values
+currentPriceHigh = pricePivotHigh
+currentGciHigh   = gciPivotHigh
+
+currentPriceLow = pricePivotLow
+currentGciLow   = gciPivotLow
+
+//----------------------------------------------------
+// Bearish Divergence
+//
+// Price: Higher High
+// GCI:   Lower High
+//----------------------------------------------------
+
+bearishDivergence = false
+
+if not na(currentPriceHigh) and not na(currentGciHigh)
+
+    if not na(prevPriceHigh) and not na(prevGciHigh)
+
+        priceHigherHigh = currentPriceHigh > prevPriceHigh
+        gciLowerHigh    = currentGciHigh < prevGciHigh
+
+        bearishDivergence := priceHigherHigh and gciLowerHigh
+
+    prevPriceHigh := currentPriceHigh
+    prevGciHigh   := currentGciHigh
+
+//----------------------------------------------------
+// Bullish Divergence
+//
+// Price: Lower Low
+// GCI:   Higher Low
+//----------------------------------------------------
+
+bullishDivergence = false
+
+if not na(currentPriceLow) and not na(currentGciLow)
+
+    if not na(prevPriceLow) and not na(prevGciLow)
+
+        priceLowerLow = currentPriceLow < prevPriceLow
+        gciHigherLow  = currentGciLow > prevGciLow
+
+        bullishDivergence := priceLowerLow and gciHigherLow
+
+    prevPriceLow := currentPriceLow
+    prevGciLow   := currentGciLow
+
+//====================================================
+// GCI DIRECTION
+//====================================================
+
+gciBullish =
+     gci_fast > 0 and
+     gci_medium > 0 and
+     gci_slow > 0
+
+gciBearish =
+     gci_fast < 0 and
+     gci_medium < 0 and
+     gci_slow < 0
+
+//====================================================
+// MOMENTUM ALIGNMENT
+//====================================================
+
+bullMomentum =
+     fastSlope > 0 and
+     mediumSlope > 0
+
+bearMomentum =
+     fastSlope < 0 and
+     mediumSlope < 0
+
+//====================================================
+// PLOTS
+//====================================================
+
+hline(0, "Zero", color=color.gray, linestyle=hline.style_dotted)
+
+plot(gci_slow, title="GCI Slow", color=color.blue, linewidth=2)
+
+plot(gci_medium, title="GCI Medium", color=color.orange, linewidth=2)
+
+plot(gci_fast, title="GCI Fast", color=color.aqua, linewidth=1)
+
+//====================================================
+// DIVERGENCE MARKERS
+//====================================================
+
+plotshape(bearishDivergence, title="Bearish Divergence", style=shape.triangledown, location=location.top, color=color.red, size=size.small, text="DIV↓")
+
+plotshape(bullishDivergence, title="Bullish Divergence", style=shape.triangleup, location=location.bottom,color=color.lime, size=size.small, text="DIV↑")
+
+//====================================================
+// MOMENTUM MARKERS
+//====================================================
+
+plotshape(gciBullish and bullMomentum, title="Full Bull Alignment", style=shape.circle, location=location.bottom, color=color.lime, size=size.tiny)
+
+plotshape(gciBearish and bearMomentum, title="Full Bear Alignment", style=shape.circle, location=location.top, color=color.red, size=size.tiny)
+
+//====================================================
+// ALERTS
+//====================================================
+
+// alertcondition(
+//      bearishDivergence,
+//      title="XAU Bearish GCI Divergence",
+//      message="XAUUSD Higher High + GCI Lower High"
+// )
+
+// alertcondition(
+//      bullishDivergence,
+//      title="XAU Bullish GCI Divergence",
+//      message="XAUUSD Lower Low + GCI Higher Low"
+// )
+
+// alertcondition(
+//      gciBullish and bullMomentum,
+//      title="GCI Full Bull Alignment",
+//      message="GCI Fast + Medium + Slow bullish"
+// )
+
+// alertcondition(
+//      gciBearish and bearMomentum,
+//      title="GCI Full Bear Alignment",
+//      message="GCI Fast + Medium + Slow bearish"
+// )
+
+
+
+
+
+
+
